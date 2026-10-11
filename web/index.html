@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ask the Blade</title>
+  <meta name="description" content="Ask questions about a wind turbine blade. A BEM solver runs every calculation.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    try {
+      const q = new URLSearchParams(location.search).get("theme");
+      const t = q === "light" || q === "dark" ? q : localStorage.getItem("atb.theme");
+      if (t) document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar" aria-label="Chats">
+      <div class="brand">
+        <svg class="rotor rotor-sm" viewBox="-24 -24 48 48" aria-hidden="true"></svg>
+        <span>Ask the Blade</span>
+      </div>
+
+      <button class="new-chat" id="newChat" type="button">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+        New chat
+      </button>
+
+      <div class="history-label">Recent</div>
+      <nav class="history" id="history"></nav>
+
+      <div class="sidebar-foot">
+        <div class="spend-row">
+          <span>Session spend</span>
+          <span class="mono" id="spend">$0.0000</span>
+        </div>
+        <div class="spend-track" aria-hidden="true"><i id="spendBar"></i></div>
+        <div class="spend-cap" id="spendCap">Cap $0.10 · resets when the server restarts</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menuBtn" type="button" aria-label="Show chats">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14"/></svg>
+        </button>
+        <div class="topbar-title" id="chatTitle">New chat</div>
+        <div class="topbar-actions">
+          <span class="chip" id="modeChip">Connecting…</span>
+          <button class="icon-btn" id="themeBtn" type="button" aria-label="Switch to light theme">
+            <svg class="i-sun" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.5"/><path d="M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2M4 4l1.4 1.4M14.6 14.6 16 16M4 16l1.4-1.4M14.6 5.4 16 4"/></svg>
+            <svg class="i-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.5 12.2A7 7 0 0 1 7.8 3.5a7 7 0 1 0 8.7 8.7Z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <section class="thread" id="thread">
+        <div class="empty" id="empty">
+          <svg class="rotor rotor-hero" viewBox="-24 -24 48 48" aria-hidden="true"></svg>
+          <h1>Ask the blade.</h1>
+          <p class="lede">Ask about a 20 m rotor in plain words. A blade element momentum solver runs every calculation, and you can open each run to see the numbers behind the answer.</p>
+          <dl class="limits">
+            <div><dt>Tip-speed ratio</dt><dd>4 – 10</dd></div>
+            <div><dt>Angle of attack</dt><dd>2 – 12°</dd></div>
+            <div><dt>Blades</dt><dd>1 – 4</dd></div>
+            <div><dt>Chord cap</dt><dd>1.0 – 3.0 m</dd></div>
+          </dl>
+          <div class="examples" id="examples"></div>
+        </div>
+        <div class="messages" id="messages" aria-live="polite"></div>
+      </section>
+
+      <footer class="composer-wrap">
+        <form class="composer" id="composer">
+          <label class="sr-only" for="input">Your question</label>
+          <textarea id="input" rows="1" placeholder="Ask about Cp, thrust, blade count, tip-speed ratio…" autocomplete="off"></textarea>
+          <button class="send" id="sendBtn" type="submit" aria-label="Send">
+            <svg class="i-send" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4M5 9l5-5 5 5"/></svg>
+            <svg class="i-stop" viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1.5"/></svg>
+          </button>
+        </form>
+        <p class="composer-note">Every number comes from a solver run on this machine. Open the run cards to check them.</p>
+      </footer>
+    </main>
+  </div>
+  <div class="scrim" id="scrim"></div>
+  <script src="app.js"></script>
+</body>
+</html>

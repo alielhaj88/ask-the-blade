@@ -1,0 +1,22 @@
+# secrets
+.env
+.env.*
+
+# local tooling and personal notes
+.claude/
+CLAUDE.md
+
+# generated at runtime
+tool_log.jsonl
+test_results.json
+__pycache__/
+*.pyc
+.venv/
+
+# editor / OS
+.DS_Store
+tempCodeRunnerFile.py
+
+# earlier learning exercises, not part of this project
+emails.json
+step2.py
