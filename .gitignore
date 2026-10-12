@@ -20,3 +20,7 @@ tempCodeRunnerFile.py
 # earlier learning exercises, not part of this project
 emails.json
 step2.py
+
+# generated
+exports/
+*.stl

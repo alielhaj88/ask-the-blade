@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900"><rect width="1600" height="900" fill="#fff"/><defs>
+<style>@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@600&amp;display=swap');
+text{font-family:'Caveat','Bradley Hand','Segoe Print',cursive;font-weight:600}</style>
+<filter id="wob" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="2" seed="4" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="4"/></filter>
+<marker id="aO" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1,1 L9,5 L1,9" fill="none" stroke="#e8761a" stroke-width="2" stroke-linecap="round"/></marker>
+<marker id="aR" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1,1 L9,5 L1,9" fill="none" stroke="#d62828" stroke-width="2" stroke-linecap="round"/></marker>
+<marker id="aB" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1,1 L9,5 L1,9" fill="none" stroke="#2a62c9" stroke-width="2" stroke-linecap="round"/></marker>
+<marker id="aK" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1,1 L9,5 L1,9" fill="none" stroke="#111" stroke-width="2" stroke-linecap="round"/></marker>
+<g id="xh"><path d="M-21,0 C-26,-30 -11,-50 2,-50 C17,-50 27,-28 22,1 C10,5 -9,5 -21,0 Z" fill="#111" stroke="#111" stroke-width="2"/>
+<circle cx="-7" cy="-30" r="4.6" fill="#fff"/><circle cx="10" cy="-30" r="4.6" fill="#fff"/>
+<path d="M-10,4 L-14,28 M9,4 L13,28" stroke="#111" stroke-width="3"/></g>
+<g id="drawer"><path d="M0,0 L88,-2 L90,60 L2,62 Z"/><path d="M2,26 L89,24"/><circle cx="45" cy="44" r="4"/></g>
+<g id="chk"><path d="M4,16 L12,25 L28,4" fill="none" stroke="#2a62c9" stroke-width="3.5" stroke-linecap="round"/></g>
+</defs><g filter="url(#wob)" fill="none" stroke="#111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+<path d="M250,360 Q700,343 1400,425 L1400,487 Q700,545 250,545 Z"/><path d="M365,366 L365,539"/><path d="M480,373 L480,533"/><path d="M595,379 L595,527"/><path d="M710,386 L710,521"/><path d="M825,392 L825,515"/><path d="M940,399 L940,509"/><path d="M1055,405 L1055,503"/><path d="M1170,412 L1170,497"/><path d="M1285,418 L1285,491"/>
+<circle cx="200" cy="452" r="55"/>
+<path d="M250,596 L1400,596" marker-start="url(#aK)" marker-end="url(#aK)" stroke-width="2.5"/>
+<use href="#xh" x="538" y="344"/><path d="M558,322 L606,296"/>
+<circle cx="650" cy="285" r="32"/><path d="M650,285 L668,262" stroke-width="3"/>
+<rect x="900" y="712" width="504" height="46"/><path d="M920,714 L906,756" stroke-width="1.8"/><path d="M942,714 L928,756" stroke-width="1.8"/><path d="M964,714 L950,756" stroke-width="1.8"/><path d="M986,714 L972,756" stroke-width="1.8"/><path d="M1008,714 L994,756" stroke-width="1.8"/><path d="M1030,714 L1016,756" stroke-width="1.8"/><path d="M1052,714 L1038,756" stroke-width="1.8"/><path d="M1074,714 L1060,756" stroke-width="1.8"/><path d="M1096,714 L1082,756" stroke-width="1.8"/><path d="M1118,714 L1104,756" stroke-width="1.8"/><path d="M1140,714 L1126,756" stroke-width="1.8"/><path d="M1162,714 L1148,756" stroke-width="1.8"/><path d="M1184,714 L1170,756" stroke-width="1.8"/><path d="M1206,714 L1192,756" stroke-width="1.8"/><path d="M1228,714 L1214,756" stroke-width="1.8"/><path d="M1250,714 L1236,756" stroke-width="1.8"/><path d="M1272,714 L1258,756" stroke-width="1.8"/><path d="M1294,714 L1280,756" stroke-width="1.8"/><path d="M1316,714 L1302,756" stroke-width="1.8"/><path d="M1338,714 L1324,756" stroke-width="1.8"/><path d="M1360,714 L1346,756" stroke-width="1.8"/><path d="M1382,714 L1368,756" stroke-width="1.8"/>
+<path d="M1500,680 L1500,790" stroke-dasharray="10 9" stroke-width="3"/>
+<use href="#xh" x="1448" y="758"/><path d="M1432,734 L1406,735"/>
+</g>
+<g filter="url(#wob)"><path d="M900,195 L900,330" fill="none" stroke="#2a62c9" stroke-width="3.5" stroke-linecap="round" marker-end="url(#aB)"/><path d="M1050,195 L1050,330" fill="none" stroke="#2a62c9" stroke-width="3.5" stroke-linecap="round" marker-end="url(#aB)"/><path d="M1200,195 L1200,330" fill="none" stroke="#2a62c9" stroke-width="3.5" stroke-linecap="round" marker-end="url(#aB)"/><path d="M1350,195 L1350,330" fill="none" stroke="#2a62c9" stroke-width="3.5" stroke-linecap="round" marker-end="url(#aB)"/>
+<path d="M705,285 a60,60 0 1,0 -52,-82" fill="none" stroke="#e8761a" stroke-width="4" stroke-linecap="round" marker-end="url(#aO)"/>
+</g>
+<text x="1000" y="170" fill="#2a62c9" font-size="32" text-anchor="start">8 m/s wind</text>
+<text x="168" y="462" fill="#111" font-size="26" text-anchor="start">hub</text>
+<text x="538" y="640" fill="#111" font-size="34" text-anchor="middle">20 m blade, cut into 10 rings</text>
+<text x="330" y="215" fill="#2a62c9" font-size="28" text-anchor="start">repeat until it settles</text>
+
+<text x="850" y="742" fill="#d62828" font-size="36" text-anchor="end">Cp</text><text x="1150" y="800" fill="#d62828" font-size="34" text-anchor="middle">Cp 0.4978</text>
+<text x="1500" y="670" fill="#111" font-size="28" text-anchor="middle">Betz limit 0.593</text><text x="1500" y="822" fill="#d62828" font-size="24" text-anchor="middle">nobody gets past this</text>
+</svg>

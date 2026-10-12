@@ -1,0 +1,608 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Ask the Blade: code guide</title><style>
+@page{size:A4;margin:16mm 14mm}
+*{box-sizing:border-box}
+body{font:11.5pt/1.5 -apple-system,'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;margin:0}
+h1{font-size:30pt;line-height:1.1;margin:.2em 0}
+h2{font-size:19pt;border-bottom:3px solid #111;padding-bottom:4px;margin:0 0 .6em}
+h3{font-size:13pt;margin:1.3em 0 .4em;color:#2a62c9}
+.cover{min-height:230mm;display:flex;flex-direction:column;justify-content:center;page-break-after:always}
+.kicker{color:#e8761a;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+.sub{font-size:14pt;max-width:140mm;color:#333}.sub.small{font-size:10.5pt;color:#777}
+.newpage{page-break-before:always}
+pre{background:#f6f6f4;border:1px solid #e2e2de;border-left:4px solid #111;border-radius:3px;padding:8px 10px;margin:0;font:8.6pt/1.4 'SF Mono',Menlo,monospace;white-space:pre-wrap;word-break:break-word}
+code{font:9.2pt 'SF Mono',Menlo,monospace;background:#f1f1ee;padding:0 3px;border-radius:3px}
+pre code{background:none;padding:0}
+.step{margin:0 0 12px;page-break-inside:avoid}
+.why{border-left:4px solid #e8761a;background:#fff8f1;padding:7px 10px;font-size:10.5pt}
+.note,.warn{padding:8px 12px;border-radius:3px;margin:12px 0;font-size:10.5pt;page-break-inside:avoid}
+.note{background:#eef3fc;border-left:4px solid #2a62c9}
+.warn{background:#fdeeee;border-left:4px solid #d62828}
+img{width:100%;border:1px solid #eee;margin:8px 0 0}
+.cap{font-size:9.5pt;color:#666;margin:2px 0 12px}
+table{border-collapse:collapse;width:100%;margin:8px 0 14px;font-size:10pt;page-break-inside:avoid}
+th,td{border:1px solid #d6d6d2;padding:5px 8px;text-align:left;vertical-align:top}
+th{background:#f1f1ee}
+ul{margin:.3em 0 1em;padding-left:1.2em}
+</style></head><body>
+<section class="cover">
+<div class="kicker">Wind BEM Agent</div>
+<h1>Ask the Blade: how every piece works</h1>
+<p class="sub">A guided read of the code at SHIP 2: the physics solver, the agent that calls it, the checker that keeps it honest, and Phases 8 to 11 (chord and twist search, real airfoils, whole-design search, 3D blade and STL).</p>
+<p class="sub small">Written for Ali. Every code block below is pulled straight from your files, so it matches what is on disk.</p>
+</section>
+
+<section>
+<h2>0. The big picture</h2>
+<p>You type a plain-English question. A language model (Claude Haiku 4.5) does <b>not</b> answer from memory. It picks one of eleven tools, the solver runs the real physics, and the model reports the numbers that come back. That one rule, <i>the model never does physics</i>, shapes almost every file.</p>
+<img src="file:///Users/alielhaj/Documents/Workspace/04_LEARNING/AI Agents Mastery/Wind BEM Agent/assets/bem-system-illustrations/01-question-trip.png">
+<p class="cap">Picture 1. One question's trip. Orange = the path, red = rules, blue = system notes.</p>
+<table>
+<tr><th>File</th><th>Job</th><th>Part</th></tr>
+<tr><td><code>bem_core.py</code></td><td>The physics: blade design and the BEM solver</td><td>1</td></tr>
+<tr><td><code>BEM_solver_agent.py</code></td><td>Tool schemas, input checks, the loop that talks to Claude, the system prompt, logging</td><td>2</td></tr>
+<tr><td><code>chord_opt.py</code></td><td>Phase 8: find a better chord, plot the blade</td><td>3</td></tr>
+<tr><td><code>twist_opt.py</code>, <code>design_opt.py</code>, <code>blade_geometry.py</code>, <code>data/airfoils/</code></td><td>Phases 9 to 11: twist search, real airfoils, whole-design search, 3D blade and STL</td><td>3b</td></tr>
+<tr><td><code>evals.py</code></td><td>109 free automatic checks</td><td>4</td></tr>
+<tr><td><code>check_answer.py</code>, <code>test_questions.py</code>, <code>run_tests.py</code>, <code>break_it.py</code></td><td>Test the agent and catch invented numbers and claims</td><td>4</td></tr>
+<tr><td><code>app.py</code> + <code>web/</code></td><td>Local web chat page</td><td>5</td></tr>
+</table>
+<div class="note"><b>How to read this.</b> Each section says what a piece is, why it exists, then walks the code in small chunks. Each chunk is followed by a plain explanation. Part 6 is a glossary and a list of the bugs you hit, so you can spot them next time.</div>
+</section>
+<section class="newpage"><h2>1. bem_core.py: the physics</h2>
+<p><b>What BEM does.</b> A real blade is too complicated to solve in one go, so BEM cuts it into thin rings along its length. Each ring is treated as a small 2D wing. For each ring we find how much the wind is slowed down and swirled by the rotor, then add up the force and torque from all rings. Adding them up gives power.</p>
+<h3>1.1 Constants and the ring grid</h3>
+<div class="step"><pre>V_inf = 8.0       # m/s, wind speed
+R = 20.0          # m, rotor radius
+B = 3             # default number of blades
+rho = 1.225       # kg/m^3
+
+# ==================== Rotor discretization ====================
+N = 10            # number of rings
+r_hub = 2.0       # m
+
+edges = np.linspace(r_hub, R, N + 1)
+r = (edges[:-1] + edges[1:]) / 2      # ring midpoints
+dr = (R - r_hub) / N                  # ring width</pre><div class="why"><code>V_inf</code> is wind speed (8 m/s), <code>R</code> the rotor radius (20 m), <code>rho</code> air density. <code>N = 10</code> rings between the hub (<code>r_hub</code> 2 m) and the tip. <code>np.linspace(2, 20, 11)</code> makes 11 evenly spaced edge positions. <code>edges[:-1]</code> means all edges except the last, <code>edges[1:]</code> all except the first, so adding them and dividing by 2 gives the midpoint of each ring. That is <code>r</code>: 2.9, 4.7, ... 19.1 m. <code>dr</code> is the width of one ring (1.8 m).</div></div>
+<div class="step"><pre>tol = 1e-6
+max_iter = 100</pre><div class="why">Settings for the solver: stop when the answer changes by less than 0.000001 (<code>1e-6</code> is scientific notation), and never loop more than 100 times.</div></div>
+
+<h3>1.2 airfoil(): the stand-in lift and drag curves</h3>
+<div class="step"><pre>def airfoil(alpha, polar=&quot;standin&quot;):
+    a_deg = np.degrees(alpha)                                       # alpha in radians
+    if polar == &quot;standin&quot;:
+        C_L = 0.11 * (a_deg + 2)
+        C_L = np.where(a_deg &gt; 12, 1.54 - 0.05 * (a_deg - 12), C_L)     # after stall
+        C_D = 0.008 + 0.01 * C_L**2
+        C_D = np.where(a_deg &gt; 12, C_D + 0.02 * (a_deg - 12), C_D)      # after stall
+        return C_L, C_D</pre><div class="why">An airfoil is the wing cross-section. Its <b>angle of attack</b> (alpha) is the angle between the chord line and the wind it feels. This function returns the lift coefficient <code>C_L</code> and drag coefficient <code>C_D</code> for a given alpha. <code>np.degrees</code> converts radians to degrees. Lift grows in a straight line with alpha until 12 degrees, then the blade <b>stalls</b>. <code>np.where(condition, a, b)</code> picks <code>a</code> where the condition is true and <code>b</code> elsewhere, and it works on whole arrays at once. Drag is a small base value plus a term that grows with lift squared, plus a stall penalty. <code>**2</code> means squared. This is the <code>polar='standin'</code> branch; the real-airfoil branch below it is covered in Part 3b.</div></div>
+<div class="warn"><b>Important.</b> This polar is a stand-in, not real airfoil data. Real data arrives in Phase 10. Cp numbers are valid for learning how the system works, not for real blade design.</div>
+
+<h3>1.3 design_blade(): choose chord and twist</h3>
+<div class="step"><pre>def design_blade(omega_design, alpha_d_deg, a_target, c_max, B=3, polar=&quot;standin&quot;):
+    alpha_d = np.radians(alpha_d_deg)
+    phi_d = np.arctan(V_inf * (1 - a_target) / (omega_design * r))
+    beta_d = phi_d - alpha_d
+
+    C_L_d, C_D_d = airfoil(alpha_d, polar)
+    C_n_d = C_L_d * np.cos(phi_d) + C_D_d * np.sin(phi_d)
+    sigma_d = 4 * np.sin(phi_d)**2 * a_target / ((1 - a_target) * C_n_d)
+    c_d = np.minimum(sigma_d * 2 * np.pi * r / B, c_max)
+
+    return c_d, beta_d</pre><div class="why"><b>Goal:</b> build a blade that makes the wind slow down by <code>a_target = 1/3</code> (the ideal value from Betz theory) at every ring. Line by line:<br>&bull; <code>phi_d = np.arctan(V_inf*(1-a)/(omega*r))</code>: the angle the relative wind makes with the rotor plane. <code>np.arctan</code> is the inverse tangent. <code>r</code> is an array, so this gives 10 angles at once.<br>&bull; <code>beta_d = phi_d - alpha_d</code>: <b>twist</b>. The blade is turned so that the wind meets it at exactly the design angle of attack. Since phi gets smaller toward the tip, twist <i>decreases</i> from root to tip.<br>&bull; <code>C_n_d</code> is the force coefficient pointing along the wind, built from lift and drag with <code>np.cos</code> and <code>np.sin</code>.<br>&bull; <code>sigma_d</code> is <b>solidity</b>, how much of the ring circle the blades fill. The formula comes from balancing momentum theory with blade theory for the target <code>a</code>.<br>&bull; <code>c_d = np.minimum(sigma*2*pi*r/B, c_max)</code>: turn solidity into a chord length (ring circumference times solidity, split over <code>B</code> blades), then <code>np.minimum</code> caps each value at <code>c_max</code>. That is the <b>chord cap</b>.<br>It returns two arrays of 10 values: chord and twist.</div></div>
+
+<h3>1.4 solve_ring(): the heart of BEM</h3>
+<p>Here is the loop that makes BEM work. The wind slowdown <code>a</code> and the swirl <code>a_prime</code> both change the angle of attack, but the angle of attack decides the forces that decide <code>a</code> and <code>a_prime</code>. It is circular, so we guess, recompute, and repeat until the answer stops changing. That is called <b>fixed-point iteration</b>.</p>
+<img src="file:///Users/alielhaj/Documents/Workspace/04_LEARNING/AI Agents Mastery/Wind BEM Agent/assets/bem-system-illustrations/02-inside-the-solver.png">
+<p class="cap">Picture 2. 小黑 keeps turning the dial on a ring until it settles. Total power can never beat the Betz limit.</p>
+<div class="step"><pre>def solve_ring(r_i, c_i, beta_i, omega, B=3, polar=&quot;standin&quot;):
+    sigma = (B * c_i) / (2 * np.pi * r_i)
+    a = 0.3
+    a_prime = 0.01</pre><div class="why"><code>sigma</code> is solidity again, now computed from the chord you actually have. <code>a = 0.3</code> and <code>a_prime = 0.01</code> are the first guesses. <code>B=3</code> is a default value used if you do not pass a blade count.</div></div>
+<div class="step"><pre>    for i in range(max_iter):
+        V_axial = V_inf * (1 - a)
+        V_tan = omega * r_i * (1 + a_prime)
+
+        phi = np.arctan(V_axial / V_tan)
+        alpha = phi - beta_i</pre><div class="why"><code>for i in range(max_iter)</code> repeats up to 100 times. Each time: the axial wind speed (reduced by <code>a</code>), the tangential speed (increased by <code>a_prime</code> from swirl), the flow angle <code>phi</code>, and the angle of attack <code>alpha = phi - beta</code>. Same idea as design time, but now with the real <code>a</code> and <code>a_prime</code>.</div></div>
+<div class="step"><pre>        C_L, C_D = airfoil(alpha, polar)
+        C_n = C_L * np.cos(phi) + C_D * np.sin(phi)
+        C_t = C_L * np.sin(phi) - C_D * np.cos(phi)
+
+        a_new = 1 / (1 + (4 * np.sin(phi)**2) / (sigma * C_n))
+        a_prime_new = 1 / (4 * np.sin(phi) * np.cos(phi) / (sigma * C_t) - 1)</pre><div class="why">Look up lift and drag from the airfoil, convert to normal and tangential force coefficients (<code>C_n</code>, <code>C_t</code>), then compute <b>new</b> values of <code>a</code> and <code>a_prime</code> from the momentum equations.</div></div>
+<div class="step"><pre>        if abs(a_new - a) &lt; tol and abs(a_prime_new - a_prime) &lt; tol:
+            converged = True
+            break
+
+        a, a_prime = a_new, a_prime_new
+
+    if not converged:
+        print(f&quot;Warning: ring at r = {r_i:.2f} m did not converge in {max_iter} iterations.&quot;)
+
+    return a, a_prime, phi, alpha, i + 1, converged</pre><div class="why"><code>abs()</code> is absolute value. If both values moved less than <code>tol</code>, the ring has <b>converged</b>: set the flag and <code>break</code> out of the loop. Otherwise <code>a, a_prime = a_new, a_prime_new</code> replaces the guesses (Python lets you assign two things in one line) and the loop goes round again. If 100 rounds pass without settling, it prints a warning. It returns six things, including how many rounds it took (<code>i + 1</code>) and whether it converged.</div></div>
+<div class="note"><b>Known gotcha.</b> Warnings about non-convergence at extreme settings are expected (for example 4 blades with a 3.0 m cap). Never hide them by capping values, because they tell you the result at that corner cannot be trusted.</div>
+
+<h3>1.5 solve_rotor(): add up the rings</h3>
+<div class="step"><pre>def solve_rotor(omega, c, beta, B, polar=&quot;standin&quot;):
+    a_arr = np.zeros(N)
+    a_prime_arr = np.zeros(N)
+    phi_arr = np.zeros(N)
+    alpha_arr = np.zeros(N)
+    iter_arr = np.zeros(N, dtype=int)
+    conv_arr = np.zeros(N, dtype=bool)</pre><div class="why">Make empty arrays of 10 zeros (<code>np.zeros(N)</code>) to hold the results for each ring.</div></div>
+<div class="step"><pre>    for i in range(N):
+        (a_arr[i], a_prime_arr[i], phi_arr[i], alpha_arr[i],
+         iter_arr[i], conv_arr[i]) = solve_ring(r[i], c[i], beta[i], omega, B, polar)</pre><div class="why">Loop over the 10 rings and call <code>solve_ring</code> for each, using that ring's radius, chord and twist. The parentheses on the left unpack the six returned values into the six arrays at position <code>i</code>.</div></div>
+<div class="step"><pre>    V_axial_arr = V_inf * (1 - a_arr)
+    V_tan_arr = omega * r * (1 + a_prime_arr)
+    V_rel_arr = np.sqrt(V_axial_arr**2 + V_tan_arr**2)
+    C_L, C_D = airfoil(alpha_arr, polar)
+    C_n_arr = C_L * np.cos(phi_arr) + C_D * np.sin(phi_arr)
+    C_t_arr = C_L * np.sin(phi_arr) - C_D * np.cos(phi_arr)
+
+    dF_n_arr = 0.5 * rho * V_rel_arr**2 * c * C_n_arr * dr
+    dF_t_arr = 0.5 * rho * V_rel_arr**2 * c * C_t_arr * dr
+    dT_arr = B * dF_n_arr
+    dQ_arr = B * r * dF_t_arr</pre><div class="why">With every ring solved, compute the relative wind speed at each ring (Pythagoras: <code>np.sqrt</code> of the two speeds squared), then the force on one blade element: <code>0.5*rho*V_rel**2*c*C*dr</code> is the standard lift-style force formula (half density times speed squared times area times coefficient). Multiply by <code>B</code> blades for thrust. For torque multiply the tangential force by the arm <code>r</code> as well.</div></div>
+<div class="step"><pre>    T = np.sum(dT_arr)
+    Q = np.sum(dQ_arr)
+    P = Q * omega
+    P_wind = 0.5 * rho * np.pi * R**2 * V_inf**3
+    Cp = P / P_wind
+    C_T = T / (0.5 * rho * np.pi * R**2 * V_inf**2)
+    lmbda = omega * R / V_inf</pre><div class="why"><code>np.sum</code> adds the rings up: total thrust <code>T</code>, torque <code>Q</code>. Power is torque times angular speed (<code>P = Q*omega</code>). <code>Cp</code> is the <b>power coefficient</b>: the power you extract divided by the power in the wind passing through the rotor disc (<code>P_wind</code>). <code>lmbda</code> is the <b>tip-speed ratio</b>: blade tip speed divided by wind speed.</div></div>
+<div class="step"><pre>    dT_mom_arr = 4 * np.pi * rho * V_inf**2 * a_arr * (1 - a_arr) * r * dr
+    T_mom = np.sum(dT_mom_arr)</pre><div class="why">A second way to compute thrust, straight from momentum theory. It is only used to check the first answer.</div></div>
+<p>Finally it returns everything in a <b>dictionary</b>, a set of named values: <code>res['Cp']</code>, <code>res['T']</code>, <code>res['dQ']</code> and so on. This is why later code can ask for exactly what it needs by name.</p>
+
+<h3>1.6 validate_rotor(): self-checks</h3>
+<p>Four automatic tests on a result: Cp is below the Betz limit (16/27, about 0.5926, the most any rotor can extract from the wind); every <code>a</code> is between 0 and 0.5; all rings converged; and BEM thrust and momentum thrust agree within 1%. If any fails you know not to trust the number. Baseline blade result: <b>Cp 0.4978, thrust 42,531 N</b>, all rings converged.</p>
+</section><section class="newpage"><h2>2. BEM_solver_agent.py: the agent</h2>
+<p>The model can only use a function if you describe it. Everything in this file is about three jobs: <b>describe</b> the functions so the model picks the right one, <b>guard</b> the inputs, and <b>run the loop</b> that passes messages back and forth.</p>
+<h3>2.1 A tool schema</h3>
+<div class="step"><pre>design_blade_tool = {
+    &quot;name&quot;: &quot;design_blade&quot;,
+    &quot;description&quot;: &quot;Designs a wind turbine blade (chord and twist along the span) for a given tip-speed ratio, design angle of attack, blade count and chord cap. Validated ranges only.&quot;,
+    &quot;input_schema&quot;: 
+    {
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;properties&quot;: 
+        {
+            &quot;lambda_design&quot;: {
+                &quot;type&quot;: &quot;number&quot;,
+                &quot;description&quot;: &quot;Design tip-speed ratio. Valid range: 4 to 10.&quot;
+            },
+            &quot;alpha_design_deg&quot;: {
+                &quot;type&quot;: &quot;number&quot;,
+                &quot;description&quot;: &quot;Angle of attack the blade is designed around, in degrees, the angle between the chord line and the oncoming relative wind. Valid range: 2 to 12.&quot;
+            },
+            &quot;num_blades&quot;: {
+                &quot;type&quot;: &quot;integer&quot;,
+                &quot;description&quot;: &quot;Number of blades. Valid range: 1 to 4.&quot;
+            },
+            &quot;chord_cap_m&quot;: {
+                &quot;type&quot;: &quot;number&quot;,
+                &quot;description&quot;: &quot;Maximum allowed chord length at any point along the blade, in meters. The design never exceeds this, even if the theoretical optimum would be wider. Valid range: 1.0 to 3.0.&quot;
+            },
+            &quot;airfoil&quot;: {
+                &quot;type&quot;: &quot;string&quot;,
+                &quot;enum&quot;: POLARS,
+                &quot;description&quot;: &quot;Airfoil polar. &#x27;standin&#x27; (default) is a made-up teaching polar, not real data. naca0012, naca4412, naca4415 and s809 are XFOIL data at Reynolds number 1,000,000. Leave it out unless the user names an airfoil or asks for real airfoil data.&quot;
+            },
+        },
+        &quot;required&quot;: [&quot;lambda_design&quot;, &quot;alpha_design_deg&quot;, &quot;num_blades&quot;, &quot;chord_cap_m&quot;]
+    },
+}</pre><div class="why">A tool is a Python dictionary with three parts. <code>name</code> and <code>description</code> are what the model reads to decide when to use it, so descriptions say <i>what the tool does and when to use it</i>. <code>input_schema</code> lists the inputs the model must supply, each with a <code>type</code> and a <code>description</code> that includes the valid range. Units live in the names (<code>chord_cap_m</code>, <code>alpha_design_deg</code>) so nobody guesses. <code>required</code> lists the inputs the model may not leave out.</div></div>
+<div class="note"><b>Your recurring bug:</b> writing the schema as bare ranges instead of <code>{'type': ..., 'description': ...}</code>, and an extra <code>}</code> that pushes <code>required</code> outside <code>input_schema</code>. The code still runs, it just silently stops working.</div>
+<h3>2.2 make_sweep_tool(): one builder for four tools</h3>
+<div class="step"><pre>def make_sweep_tool(name, description, swept_key):
+    properties = {k: v for k, v in design_blade_tool[&quot;input_schema&quot;][&quot;properties&quot;].items() if k != swept_key}
+    return {
+        &quot;name&quot;: name,
+        &quot;description&quot;: description,
+        &quot;input_schema&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: properties,
+            &quot;required&quot;: [k for k in design_blade_tool[&quot;input_schema&quot;][&quot;required&quot;] if k != swept_key],
+        },
+    }</pre><div class="why">The four sweep tools differ only in <i>which input they vary</i>. This function builds a schema from <code>design_blade_tool</code> and removes the swept key, because the sweep sets that value itself. <code>{{k: v for k, v in ... if k != swept_key}}</code> is a <b>dictionary comprehension</b>: loop through the items and keep every pair except the swept one. <code>list(properties)</code> turns the remaining names into the <code>required</code> list.</div></div>
+<div class="step"><pre>sweep_aoa_tool = make_sweep_tool(
+    &quot;sweep_aoa&quot;,
+    &quot;Tries design angles of attack from 2 to 12 degrees at fixed tip-speed ratio, blade count and chord cap. Use this when the question compares angles of attack or asks which is best. Returns the Cp for each angle, whether each design converged, and the best one.&quot;,
+    &quot;alpha_design_deg&quot;,
+)</pre><div class="why">One call builds a whole tool. Notice the description says what is held fixed and when to use it.</div></div>
+<h3>2.3 RANGES and run_bem(): guard, then run</h3>
+<div class="step"><pre>RANGES = {
+    &quot;lambda_design&quot;: (4, 10),
+    &quot;alpha_design_deg&quot;: (2, 12),
+    &quot;num_blades&quot;: (1, 4),
+    &quot;chord_cap_m&quot;: (1, 3),
+}</pre><div class="why">The allowed (low, high) for each input. This is the <b>range check</b> gate in Picture 1.</div></div>
+<div class="step"><pre>def check_inputs(tool_input, keys=RANGES):
+    &quot;&quot;&quot;Raise ValueError for a missing or out-of-range input. Returns the airfoil name.&quot;&quot;&quot;
+    for name, (low, high) in keys.items():
+        if name not in tool_input:
+            raise ValueError(f&quot;{name} is required&quot;)
+        value = tool_input[name]
+        if not low &lt;= value &lt;= high:
+            raise ValueError(f&quot;{name} must be between {low} and {high}, got {value}&quot;)
+    airfoil = tool_input.get(&quot;airfoil&quot;, &quot;standin&quot;)
+    if airfoil not in POLARS:
+        raise ValueError(f&quot;airfoil must be one of {POLARS}, got {airfoil}&quot;)
+    return airfoil</pre><div class="why">One shared gate for every tool. <code>for name, (low, high) in keys.items()</code> loops over every input and its limits. A missing input or <code>if not low &lt;= value &lt;= high</code> (a chained comparison) means <code>raise ValueError(...)</code>: the function stops with a clear message, and the model reads that message. <code>tool_input.get('airfoil', 'standin')</code> reads the optional airfoil, falling back to the stand-in, and checks it is a known name.</div></div>
+<div class="step"><pre>def run_bem(tool_input):
+    airfoil = check_inputs(tool_input)
+    num_blades = tool_input[&#x27;num_blades&#x27;]
+    omega_design = tool_input[&#x27;lambda_design&#x27;] * V_inf / R
+
+    chord, twist = design_blade(
+        omega_design=omega_design,
+        alpha_d_deg=tool_input[&#x27;alpha_design_deg&#x27;],
+        a_target=1/3,
+        c_max=tool_input[&#x27;chord_cap_m&#x27;],
+        B=num_blades,
+        polar=airfoil,
+    )
+    res = solve_rotor(omega_design, chord, twist, num_blades, airfoil)
+
+    return {
+        &quot;cp&quot;: float(res[&#x27;Cp&#x27;]),
+        &quot;thrust_N&quot;: float(res[&#x27;T&#x27;]),
+        &quot;chord_m&quot;: chord.round(3).tolist(),
+        &quot;radius_m&quot;: r.round(2).tolist(),
+        &quot;twist_deg&quot;: np.degrees(twist).round(2).tolist(),
+        &quot;airfoil&quot;: airfoil,
+        &quot;all_rings_converged&quot;: bool(res[&#x27;converged&#x27;].all()),
+    }</pre><div class="why">First <code>check_inputs</code>. Then it converts tip-speed ratio to angular speed (<code>omega = lambda*V_inf/R</code>), calls <code>design_blade</code> then <code>solve_rotor</code>, and returns plain Python numbers and lists. <code>.round(3).tolist()</code> and <code>float(...)</code> matter: numpy types cannot be turned into JSON text.</div></div>
+<h3>2.4 run_sweep(): try a list of values</h3>
+<div class="step"><pre>def run_sweep(tool_input, swept_key, values):
+    cp_list = []
+    converged_list = []
+    for v in values:
+        out = run_bem({**tool_input, swept_key: v})
+        cp_list.append(round(out[&quot;cp&quot;], 4))
+        converged_list.append(out[&quot;all_rings_converged&quot;])
+
+    valid = [(cp, v) for cp, v, ok in zip(cp_list, values, converged_list) if ok]
+    if not valid:
+        raise ValueError(f&quot;no value of {swept_key} converged for these inputs&quot;)
+    best_cp, best_v = max(valid)
+
+    return {
+        swept_key: values,
+        &quot;cp&quot;: cp_list,
+        &quot;all_rings_converged&quot;: converged_list,
+        &quot;best_&quot; + swept_key: best_v,
+        &quot;best_cp&quot;: round(best_cp, 4),
+        &quot;cp_spread&quot;: round(max(cp_list) - min(cp_list), 4),
+    }</pre><div class="why">Loops over <code>values</code>, calling <code>run_bem</code> once per value. <code>{{**tool_input, swept_key: v}}</code> copies the inputs and overrides one key (<code>**</code> unpacks a dictionary). <code>zip</code> walks three lists side by side. Only designs where all rings converged count toward <code>best</code>, and <code>max(valid)</code> picks the highest Cp (tuples compare by first item). <code>cp_spread</code> is highest Cp minus lowest: a number the tool computes, so the model never has to do arithmetic when asked <i>which matters more</i>.</div></div>
+<div class="step"><pre>def sweep_blade_count(tool_input):
+    return run_sweep(tool_input, &quot;num_blades&quot;, [1, 2, 3, 4])
+
+def sweep_tsr(tool_input):
+    return run_sweep(tool_input, &quot;lambda_design&quot;, [4, 5.5, 7, 8.5, 10])
+
+def sweep_aoa(tool_input):
+    return run_sweep(tool_input, &quot;alpha_design_deg&quot;, [2, 4, 6, 8, 10, 12])
+
+def sweep_chord_cap(tool_input):
+    return run_sweep(tool_input, &quot;chord_cap_m&quot;, [1.0, 1.5, 2.0, 2.5, 3.0])</pre><div class="why">Four thin wrappers: each fixes which key to vary and which values to try.</div></div>
+<h3>2.5 TOOLS: name to function</h3>
+<div class="step"><pre>TOOLS = {
+    &quot;design_blade&quot;: run_bem,
+    &quot;sweep_blade_count&quot;: sweep_blade_count,
+    &quot;sweep_tsr&quot;: sweep_tsr,
+    &quot;sweep_aoa&quot;: sweep_aoa,
+    &quot;sweep_chord_cap&quot;: sweep_chord_cap,
+    &quot;optimize_chord&quot;: run_optimize_chord,
+    &quot;optimize_twist&quot;: run_optimize_twist,
+    &quot;optimize_blade&quot;: run_optimize_blade,
+    &quot;compare_airfoils&quot;: compare_airfoils,
+    &quot;optimize_design&quot;: run_optimize_design,
+    &quot;export_blade_stl&quot;: export_blade_stl,
+}</pre><div class="why">A dictionary whose keys are tool names the model can say and whose values are the Python functions. The loop does <code>TOOLS[block.name](block.input)</code>: look up the function by name, call it with the inputs. Adding a tool means adding a schema and one line here.</div></div>
+<h3>2.6 Logging</h3>
+<div class="step"><pre>def log_tool_call(name, tool_input, content, is_error):
+    entry = {
+        &quot;time&quot;: datetime.now().isoformat(),
+        &quot;tool&quot;: name,
+        &quot;input&quot;: tool_input,
+        &quot;is_error&quot;: is_error,
+        &quot;output&quot;: content,
+    }
+    with open(LOG_FILE, &quot;a&quot;) as f:
+        f.write(json.dumps(entry) + &quot;\n&quot;)</pre><div class="why">Every tool call is added to <code>tool_log.jsonl</code>, one JSON object per line. <code>open(..., 'a')</code> opens in <b>append</b> mode so old lines stay. <code>json.dumps</code> turns the dictionary into text (remember to call it, you once forgot the brackets). The checker reads this evidence later.</div></div>
+<h3>2.7 The system prompt</h3>
+<p>A long instruction block sent with every request. It was written <b>from the failures you saw</b>, not from guesses. It says: numbers only from tool results or the question, no arithmetic by the model, 'best' means best of the values tested, no why-explanations, ask for missing inputs, do not call tools for out-of-range requests, and the only outside fact allowed is Betz. Phase 8 added one line telling the model to call the optimiser's result 'best found', not 'optimal'.</p>
+<h3>2.8 ask_agent(): the loop</h3>
+<p>This is the part to understand best. A model reply is either final text or a request to use a tool. The loop keeps going until it gets text.</p>
+<div class="step"><pre>    messages = list(history or []) + [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: question}]
+    tool_calls = []
+    seen = {}</pre><div class="why"><code>messages</code> is the conversation so far: a list of dictionaries with a <code>role</code> (user or assistant) and <code>content</code>. <code>tool_calls</code> collects what was called for the checker. <code>seen</code> counts repeat calls.</div></div>
+<div class="step"><pre>    for step in range(5):
+        response = client.messages.create(
+            model=&quot;claude-haiku-4-5-20251001&quot;,
+            max_tokens=500,
+            system=SYSTEM_PROMPT,
+            tools=ALL_TOOLS,
+            messages=messages,
+        )
+        USAGE[&quot;in&quot;] += response.usage.input_tokens
+        USAGE[&quot;out&quot;] += response.usage.output_tokens
+        emit(&quot;usage&quot;, {&quot;in&quot;: response.usage.input_tokens, &quot;out&quot;: response.usage.output_tokens})
+        messages.append({&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: response.content})</pre><div class="why"><code>range(5)</code> is the <b>step cap</b>: at most 5 trips, so it can never loop forever. <code>client.messages.create</code> sends the question, tool list and system prompt to Claude. Token counts are added to <code>USAGE</code> so you can see cost. Then the model's reply is appended to <code>messages</code>.</div></div>
+<div class="step"><pre>        if response.stop_reason != &quot;tool_use&quot;:
+            break</pre><div class="why"><code>stop_reason</code> says why the model stopped. If it is anything other than <code>tool_use</code> the model has finished its answer, so <code>break</code> leaves the loop.</div></div>
+<div class="step"><pre>        tool_results = []
+        for block in response.content:
+            if block.type == &quot;tool_use&quot;:
+                call_key = (block.name, json.dumps(block.input, sort_keys=True))
+                seen[call_key] = seen.get(call_key, 0) + 1</pre><div class="why">For each block in the reply, only blocks of type <code>tool_use</code> are tool requests (a reply can also contain plain text blocks, and calling <code>.text</code> on a tool block crashes). The <b>repeat guard</b>: build a key from the tool name and inputs, and count how often it has been seen. <code>sort_keys=True</code> makes equal inputs produce equal text.</div></div>
+<div class="step"><pre>                if seen[call_key] &gt; 2:
+                    content = &quot;You already made this exact call twice. Stop calling tools and answer with what you have.&quot;
+                    is_error = True</pre><div class="why">Third identical call: do not run it, just tell the model to stop and answer.</div></div>
+<div class="step"><pre>                    try:
+                        result = TOOLS[block.name](block.input)
+                        content = trim_result(json.dumps(result))
+                        is_error = False
+                    except ValueError as e:
+                        content = str(e)
+                        is_error = True
+                    except Exception as e:
+                        content = f&quot;Tool failed with {type(e).__name__}: {e}&quot;</pre><div class="why">The <b>error path</b>. <code>try</code> runs the tool and turns the result to text with <code>json.dumps</code>, shortened by <code>trim_result</code> if over 4,000 characters. A <code>ValueError</code> (our range check) sends its own message back. Any other exception sends <code>Tool failed with ...</code>. Either way the loop survives and the model can explain what went wrong. <code>is_error</code> tells Claude the content is a failure.</div></div>
+<div class="step"><pre>                tool_results.append({
+                    &quot;type&quot;: &quot;tool_result&quot;,
+                    &quot;tool_use_id&quot;: block.id,
+                    &quot;content&quot;: content,
+                    &quot;is_error&quot;: is_error,
+                })
+        messages.append({&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: tool_results})</pre><div class="why">Each result is wrapped as a <code>tool_result</code> block with <code>tool_use_id = block.id</code>, which is how Claude matches an answer to its request. All results go back as one user message, and the loop runs again so the model can read them.</div></div>
+<p>After the loop, <code>ask_agent</code> returns the final text, the list of tool calls, and the full <code>messages</code>. If the step cap hit while the model still wanted tools, the answer is <code>None</code>.</p>
+</section><section class="newpage"><h2>3. chord_opt.py: Phase 8, chord optimisation</h2>
+<p><b>The question:</b> design_blade gives a chord from theory. Can a search find a chord with a higher Cp? You could use a general optimiser, but there is a shortcut. Each ring is solved on its own, so the power of ring 4 depends <i>only</i> on the chord of ring 4. That means you can choose the best chord for every ring separately, and no optimiser library is needed.</p>
+<div class="step"><pre>C_MIN = 0.1          # m, thinnest chord we try
+C_STEP = 0.05        # m, spacing between tried chords</pre><div class="why">Thinnest chord to try, and the step between tried chords.</div></div>
+<div class="step"><pre>def optimize_chord(lambda_design, alpha_design_deg, num_blades, chord_cap_m, airfoil=&quot;standin&quot;, a_target=1/3):
+    &quot;&quot;&quot;Return baseline and best-found chord for one design. Twist stays at the baseline twist.&quot;&quot;&quot;
+    omega = lambda_design * V_inf / R
+
+    # Baseline blade from design_blade
+    c_base, beta = design_blade(omega, alpha_design_deg, a_target, chord_cap_m, num_blades, airfoil)
+    base = solve_rotor(omega, c_base, beta, num_blades, airfoil)
+
+    # Start from the baseline: per-ring power = ring torque * omega
+    best_power = np.where(base[&quot;converged&quot;], base[&quot;dQ&quot;] * omega, -np.inf)
+    best_c = c_base.copy()</pre><div class="why"><code>omega</code> from tip-speed ratio. <code>c_base, beta</code> is the baseline blade from <code>design_blade</code>, and <code>base</code> is its full result. <code>best_power</code> starts as each ring's baseline power (torque <code>dQ</code> times <code>omega</code>); <code>np.where</code> gives <code>-inf</code> (minus infinity, lower than any real number) to rings that did not converge, so any converged candidate beats them. <code>best_c</code> starts as a copy of the baseline chord so the search can only improve.</div></div>
+<div class="step"><pre>    for c in np.arange(C_MIN, chord_cap_m + 1e-9, C_STEP):
+        with redirect_stdout(io.StringIO()), np.errstate(all=&quot;ignore&quot;):   # hide warnings from bad chords
+            res = solve_rotor(omega, np.full(N, c), beta, num_blades, airfoil)
+        ring_power = res[&quot;dQ&quot;] * omega
+        better = (ring_power &gt; best_power) &amp; res[&quot;converged&quot;]
+        best_power[better] = ring_power[better]
+        best_c[better] = c</pre><div class="why"><code>np.arange(start, stop, step)</code> makes the list of chords to try. For each chord <code>c</code>: <code>np.full(N, c)</code> builds a blade where <b>every</b> ring has chord <code>c</code>, and <code>solve_rotor</code> solves it. The per-ring power is read from <code>res['dQ']</code>. <code>better</code> is a True/False array: ring power beats the best so far <b>and</b> converged (<code>&amp;</code> means 'and' for arrays). <code>best_power[better] = ...</code> then updates only the rings where it is True. That is <b>boolean indexing</b>. <code>redirect_stdout</code> and <code>np.errstate</code> keep the screen quiet while testing silly chords.</div></div>
+<div class="step"><pre>    best = solve_rotor(omega, best_c, beta, num_blades, airfoil)
+
+    return {
+        &quot;cp_baseline&quot;: round(float(base[&quot;Cp&quot;]), 4),
+        &quot;cp_best_found&quot;: round(float(best[&quot;Cp&quot;]), 4),
+        &quot;cp_change&quot;: round(float(best[&quot;Cp&quot;] - base[&quot;Cp&quot;]), 4),
+        &quot;thrust_baseline_N&quot;: round(float(base[&quot;T&quot;])),
+        &quot;thrust_best_found_N&quot;: round(float(best[&quot;T&quot;])),
+        &quot;chord_baseline_m&quot;: c_base.round(3).tolist(),
+        &quot;chord_best_found_m&quot;: best_c.round(3).tolist(),
+        &quot;twist_deg&quot;: np.degrees(beta).round(2).tolist(),
+        &quot;radius_m&quot;: r.round(2).tolist(),
+        &quot;airfoil&quot;: airfoil,
+        &quot;rings_at_chord_cap&quot;: int(np.sum(best_c &gt;= chord_cap_m - 1e-9)),
+        &quot;baseline_all_rings_converged&quot;: bool(base[&quot;converged&quot;].all()),
+        &quot;all_rings_converged&quot;: bool(best[&quot;converged&quot;].all()),</pre><div class="why">Solve the blade made of the winning chords to get the true total Cp, and return a dictionary with baseline and best-found values side by side. Names say <code>best_found</code>, not <code>optimal</code>, because this is a search over a fixed grid, with twist held at the baseline. <code>baseline_all_rings_converged</code> warns when the baseline itself is not valid to compare with.</div></div>
+<h3>The result</h3>
+<table>
+<tr><th>Design: lambda 7, alpha 6, 3 blades, cap 2.0 m</th><th>Baseline</th><th>Best found</th></tr>
+<tr><td>Cp</td><td>0.4978</td><td>0.499</td></tr>
+<tr><td>Thrust (N)</td><td>42,531</td><td>41,588</td></tr>
+<tr><td>Chord at ring 4 to 10 (m)</td><td>2.0, 1.675, 1.429, 1.245, 1.103, 0.99, 0.898</td><td>1.9, 1.6, 1.35, 1.2, 1.05, 0.95, 0.85</td></tr>
+<tr><td>Rings at the 2.0 m cap</td><td colspan="2">3 (the inner rings stay at the cap)</td></tr>
+</table>
+<img src="file:///Users/alielhaj/Documents/Workspace/04_LEARNING/AI Agents Mastery/Wind BEM Agent/chord_planform.png">
+<p class="cap">Picture 3. Planform: baseline (blue) vs best found (orange). They almost overlap.</p>
+<div class="warn"><b>What this tells you.</b> The gain is only 0.0012 in Cp. The theory-based blade was already close to the best this stand-in polar allows. The search trims the outer chords slightly and cuts thrust by about 2%. That is a real answer: a small gain, shown honestly. With real airfoil data (Phase 10) the picture may change.</div>
+<h3>plot_planform(): the picture</h3>
+<div class="step"><pre>    rr = np.array(result[&quot;radius_m&quot;])
+    fig, ax = plt.subplots(figsize=(10, 4))
+    for key, label, colour in [(&quot;chord_baseline_m&quot;, &quot;baseline&quot;, &quot;tab:blue&quot;),
+                               (&quot;chord_best_found_m&quot;, &quot;best found&quot;, &quot;tab:orange&quot;)]:
+        half = np.array(result[key]) / 2
+        ax.fill_between(rr, -half, half, alpha=0.3, color=colour, label=label)
+        ax.plot(rr, half, color=colour)
+        ax.plot(rr, -half, color=colour)</pre><div class="why">Draws the blade seen from above. <code>half = chord / 2</code> so the blade is centred on its axis. <code>fill_between</code> shades between <code>-half</code> and <code>+half</code>, <code>ax.plot</code> draws the outlines. <code>matplotlib.use('Agg')</code> makes it save to a file instead of opening a window (a window would block later code).</div></div>
+<h3>How the agent gets it</h3>
+<div class="step"><pre>optimize_chord_tool = {
+    &quot;name&quot;: &quot;optimize_chord&quot;,
+    &quot;description&quot;: &quot;Searches for a better chord distribution for one design, ring by ring, keeping the baseline twist and the chord cap. Use this when the question asks to improve, optimise or reshape the chord or planform. Returns the baseline Cp and the best-found Cp, cp_change, thrust for both, the chord of each ring for both, and how many rings sit at the chord cap.&quot;,
+    &quot;input_schema&quot;: design_blade_tool[&quot;input_schema&quot;],
+}
+
+def design_args(tool_input):
+    &quot;&quot;&quot;The five design inputs as keyword arguments for the optimisers, after checking them.&quot;&quot;&quot;
+    return {
+        &quot;lambda_design&quot;: tool_input[&quot;lambda_design&quot;],
+        &quot;alpha_design_deg&quot;: tool_input[&quot;alpha_design_deg&quot;],
+        &quot;num_blades&quot;: tool_input[&quot;num_blades&quot;],
+        &quot;chord_cap_m&quot;: tool_input[&quot;chord_cap_m&quot;],
+        &quot;airfoil&quot;: check_inputs(tool_input),
+    }
+
+def run_optimize_chord(tool_input):
+    return optimize_chord(**design_args(tool_input))</pre><div class="why">The tool schema reuses <code>design_blade_tool</code>'s inputs. <code>design_args</code> runs <code>check_inputs</code> and packs the inputs as keyword arguments, so each optimiser runner is one line: <code>optimize_chord(**design_args(tool_input))</code>. <code>**</code> unpacks a dictionary into named arguments. Two more edits finish any new tool: an entry in <code>TOOLS</code>, and the schema in the <code>ALL_TOOLS</code> list the loop sends to Claude.</div></div>
+</section><section class="newpage"><h2>3b. Phases 9 to 11: twist, real airfoils, the whole design, 3D</h2>
+<h3>Phase 9: twist_opt.py</h3>
+<p>Same idea as the chord search, now with twist: keep the baseline chord, try the same extra twist on every ring, keep the best per ring.</p>
+<div class="step"><pre>    for offset_deg in np.arange(OFFSET_MIN, OFFSET_MAX + 1e-9, OFFSET_STEP):
+        beta_try = beta_base + np.radians(offset_deg)
+        with redirect_stdout(io.StringIO()), np.errstate(all=&quot;ignore&quot;):
+            res = solve_rotor(omega, c, beta_try, num_blades, airfoil)
+        ring_power = res[&quot;dQ&quot;] * omega
+        better = (ring_power &gt; best_power) &amp; res[&quot;converged&quot;]
+        best_power[better] = ring_power[better]
+        best_beta[better] = beta_try[better]</pre><div class="why"><code>np.radians(offset_deg)</code> converts the offset to radians because the solver works in radians. Adding a single number to the array <code>beta_base</code> shifts every ring at once (numpy <b>broadcasting</b>). The rest is the same boolean-indexing trick as Phase 8.</div></div>
+<table><tr><th>lambda 7, alpha 6, 3 blades, cap 2.0 m</th><th>Baseline Cp</th><th>Best found Cp</th></tr>
+<tr><td>Stand-in polar, twist search</td><td>0.4978</td><td>0.502</td></tr>
+<tr><td>NACA 4412, twist search</td><td>0.5415</td><td>0.5434</td></tr></table>
+<p>The root ring gains most: its twist drops by about 8.5 degrees, which raises its angle of attack to about 12 degrees. The chord is capped there, so the search gets more lift from a steeper angle instead of a wider blade.</p>
+
+<h3>Phase 10: real airfoils in bem_core.py</h3>
+<div class="step"><pre>    tab_a, tab_cl, tab_cd = load_polar(polar)
+    a_deg = np.clip(a_deg, -89.0, 89.0)
+    C_L = np.interp(a_deg, tab_a, tab_cl)                           # inside the table
+    C_D = np.interp(a_deg, tab_a, tab_cd)
+    with np.errstate(all=&quot;ignore&quot;):
+        a_rad = np.radians(a_deg)
+        # above the table
+        cl_hi, cd_hi = _viterna(a_rad, np.radians(tab_a[-1]), tab_cl[-1], tab_cd[-1])
+        # below the table: mirror, extend, mirror back
+        cl_lo, cd_lo = _viterna(-a_rad, np.radians(-tab_a[0]), -tab_cl[0], tab_cd[0])
+    C_L = np.where(a_deg &gt; tab_a[-1], cl_hi, np.where(a_deg &lt; tab_a[0], -cl_lo, C_L))
+    C_D = np.where(a_deg &gt; tab_a[-1], cd_hi, np.where(a_deg &lt; tab_a[0], cd_lo, C_D))</pre><div class="why"><code>load_polar</code> reads an XFOIL table once (cached in a dictionary). <code>np.interp</code> does straight-line interpolation between table rows. Past the ends of the table (deep stall) there is no data, so <code>_viterna</code> extends it with a standard empirical formula that matches the last table point. Below the table the same formula is used on the mirror image. The nested <code>np.where</code> picks table, upper extension or lower extension for each angle.</div></div>
+<div class="note"><b>Why the old results did not change:</b> <code>polar</code> was added as the <i>last</i> argument with default <code>'standin'</code>, so every earlier call behaves exactly as before. evals.py checks that the baseline is still Cp 0.4978.</div>
+<table><tr><th>Airfoil (lambda 7, alpha 6, 3 blades, cap 2.0 m)</th><th>Cp</th><th>Thrust (N)</th></tr>
+<tr><td>NACA 0012 (symmetric)</td><td>0.5108</td><td>41,669</td></tr>
+<tr><td>NACA 4412</td><td>0.5415</td><td>43,123</td></tr>
+<tr><td>NACA 4415</td><td>0.5385</td><td>43,137</td></tr>
+<tr><td>S809 (NREL wind turbine airfoil)</td><td>0.5267</td><td>42,178</td></tr>
+<tr><td>Stand-in (not real)</td><td>0.4978</td><td>42,531</td></tr></table>
+<div class="warn"><b>Honest limits.</b> These are XFOIL results at Reynolds number 1,000,000, not wind-tunnel data, and the real blade runs at a few million. The solver also has no tip-loss correction, so all these Cp values are higher than a real rotor would reach. Compare designs with them, do not quote them as real performance.</div>
+
+<h3>Phase 11: design_opt.py</h3>
+<div class="step"><pre>    for c in chords:                     # every (chord, twist offset) pair, all rings at once
+        for off in offsets:
+            res = _quiet_solve(omega, np.full(N, c), beta_base + off, num_blades, airfoil)
+            ring_power = res[&quot;dQ&quot;] * omega
+            better = (ring_power &gt; best_power) &amp; res[&quot;converged&quot;]
+            best_power[better] = ring_power[better]
+            best_c[better] = c
+            best_beta[better] = beta_base[better] + off</pre><div class="why"><b>optimize_blade</b>: two loops, so every pair of (chord, twist offset) is tried on all rings at once, and each ring keeps its best pair. About 1,000 rotor solves, roughly 0.7 seconds.</div></div>
+<div class="step"><pre>    def fits(thrust, area):
+        return ((max_thrust_N is None or thrust &lt;= max_thrust_N) and
+                (max_blade_area_m2 is None or area &lt;= max_blade_area_m2))
+
+    screened, candidates = 0, []
+    for foil in airfoils:</pre><div class="why"><b>optimize_design</b> starts with a small function inside a function. <code>fits</code> returns True when a design is inside the limits. A limit of <code>None</code> means no limit, which is why each test starts with <code>max_thrust_N is None or ...</code>.</div></div>
+<div class="step"><pre>    for cand in candidates[:top_k]:      # refine the best few with the chord+twist search
+        refined = optimize_blade(cand[&quot;lambda_design&quot;], cand[&quot;alpha_design_deg&quot;], cand[&quot;num_blades&quot;],
+                                 cand[&quot;chord_cap_m&quot;], cand[&quot;airfoil&quot;])
+        use_refined = refined[&quot;all_rings_converged&quot;] and fits(refined[&quot;thrust_best_found_N&quot;],
+                                                              refined[&quot;blade_area_best_found_m2&quot;])
+        cp = refined[&quot;cp_best_found&quot;] if use_refined else round(cand[&quot;cp&quot;], 4)
+        if best is None or cp &gt; best[&quot;cp&quot;]:</pre><div class="why">After screening about 4,200 designs, it sorts by Cp (<code>sort(key=..., reverse=True)</code>) and refines only the best 3 with <code>optimize_blade</code>. The refinement can change thrust and area, so it is only used if the refined blade still <code>fits</code>.</div></div>
+<h3>Phase 11: blade_geometry.py, the 3D blade</h3>
+<div class="step"><pre>    for y, c, t in zip(rs, cs, ts):
+        xs = (outline[:, 0] - PITCH_AXIS) * c         # chordwise, pitch axis at 0
+        zs = outline[:, 1] * c                        # thickness direction
+        x = xs * np.cos(t) - zs * np.sin(t)           # turn by the twist angle
+        z = xs * np.sin(t) + zs * np.cos(t)
+        sections.append(np.column_stack([x, np.full(n, y), z]))</pre><div class="why">For each station along the span: take the airfoil outline (chord 1), shift it so the <b>pitch axis</b> is at 25% chord, scale by the chord, then turn it by the twist angle with the rotation formulas (<code>x cos t - z sin t</code>, <code>x sin t + z cos t</code>). <code>np.column_stack</code> joins the x, y and z columns into points.</div></div>
+<div class="step"><pre>    for s in range(len(rs) - 1):                      # skin: two triangles between neighbouring sections
+        a, b = s * n, (s + 1) * n
+        for i in range(n):
+            j = (i + 1) % n                           # wraps round, which also closes the trailing edge
+            faces += [(a + i, a + j, b + j), (a + i, b + j, b + i)]</pre><div class="why">The skin: between two neighbouring sections, each pair of outline points makes a quad, split into two triangles. <code>% n</code> (remainder) wraps the last point back to the first, which also closes the trailing edge.</div></div>
+<div class="step"><pre>def is_watertight(faces):
+    &quot;&quot;&quot;Every edge used exactly twice, once in each direction.&quot;&quot;&quot;
+    edges = {}
+    for f in faces:
+        for a, b in ((f[0], f[1]), (f[1], f[2]), (f[2], f[0])):
+            edges[(a, b)] = edges.get((a, b), 0) + 1
+    return all(cnt == 1 and edges.get((b, a)) == 1 for (a, b), cnt in edges.items())</pre><div class="why">A 3D-printable solid has no holes: every edge is used by exactly two triangles, once in each direction. This counts directed edges in a dictionary and checks that. All five airfoils pass, and evals.py checks it on every run.</div></div>
+<h3>The new tools</h3>
+<table><tr><th>Tool</th><th>Phase</th><th>What the model gets back</th></tr>
+<tr><td><code>optimize_twist</code></td><td>9</td><td>baseline vs best-found Cp, thrust, twist per ring, twist change, rings at the search limit</td></tr>
+<tr><td><code>compare_airfoils</code></td><td>10</td><td>Cp and thrust per airfoil, best airfoil, spread, stand-in Cp for reference</td></tr>
+<tr><td><code>optimize_blade</code></td><td>11</td><td>baseline vs best-found Cp, thrust, blade area, chord and twist per ring</td></tr>
+<tr><td><code>optimize_design</code></td><td>11</td><td>best design inputs, Cp, thrust, area, limits used, runners-up, how many designs fit</td></tr>
+<tr><td><code>export_blade_stl</code></td><td>11</td><td>STL path, triangle count, watertight flag, volume, file size</td></tr>
+</table>
+<p>Every tool also accepts an optional <code>airfoil</code>. The system prompt gained rules for the new tools: call results 'best found', never optimal; say once that real-airfoil results are XFOIL data at Re 1,000,000; mention the missing tip-loss correction if asked whether Cp is realistic.</p>
+</section><section class="newpage"><h2>4. Keeping it honest: tests and the checker</h2>
+<p>The model's numbers were mostly faithful, but its prose sometimes added claims nobody gave it (<i>'increasing twist'</i>, <i>'optimized'</i>, <i>'49.8% of theoretical maximum'</i>). So there is a checker that reads an answer and compares it with what the tools actually returned.</p>
+<img src="file:///Users/alielhaj/Documents/Workspace/04_LEARNING/AI Agents Mastery/Wind BEM Agent/assets/bem-system-illustrations/03-trust-checker.png">
+<p class="cap">Picture 4. Every number in the answer is traced to the tool log. Invented claims get caught.</p>
+<h3>The five checks in check_answer()</h3>
+<table>
+<tr><th>#</th><th>Check</th><th>How</th></tr>
+<tr><td>1</td><td>Right tool called</td><td>Each test question lists <code>tools_any</code>. At least one must appear in the log.</td></tr>
+<tr><td>2</td><td>Invented numbers</td><td><code>extract_numbers</code> pulls every number out of the answer using a <b>regular expression</b> (a pattern for text). <code>check_numbers</code> allows only numbers from the question, tool inputs, tool outputs and a short allow-list (Betz 0.593, the tool ranges).</td></tr>
+<tr><td>3</td><td>Own arithmetic</td><td><code>is_derived</code> tests whether an unexplained number equals the difference or percentage between two tool numbers. That gives a WARN, since the model did maths it was told not to do.</td></tr>
+<tr><td>4</td><td>Betz</td><td><code>check_betz</code> fails if any Cp, in a tool result or stated in the answer, is above 16/27.</td></tr>
+<tr><td>5</td><td>Prose rules and a judge</td><td><code>PROSE_RULES</code> are regex patterns for banned phrases ('optimized', 'twist is linear', '% of the span'). <code>judge_prose</code> then asks a second model (Sonnet) to list unsupported claims, and it costs money, so it is optional.</td></tr>
+</table>
+<div class="step"><pre>def check_betz(answer, question, tool_calls):
+    issues = []</pre><div class="why">A typical check: look through each tool result and read the JSON back into Python with <code>json.loads</code>.</div></div>
+<div class="step"><pre>    return {&quot;status&quot;: &quot;FAIL&quot; if fail else (&quot;WARN&quot; if warn else &quot;PASS&quot;), &quot;fail&quot;: fail, &quot;warn&quot;: warn}</pre><div class="why">The final verdict: any FAIL means the answer FAILs, otherwise any WARN means WARN, else PASS.</div></div>
+<h3>The test set and the runner</h3>
+<p><code>test_questions.py</code> holds 25 questions, each with the tools it should call. <code>run_tests.py</code> runs them through <code>ask_agent</code>, prints PASS, WARN or FAIL, and <b>tracks cost</b>: it adds up token costs and stops at a budget (default $0.10; Haiku is $1 in and $5 out per million tokens). <code>--no-judge</code> skips the judge model. Results: before the system prompt 7 passed, 2 warned, 16 failed; after it, the 20 questions re-run all passed the number and rule checks.</p>
+<h3>evals.py: free automatic checks</h3>
+<p>109 checks that need no API calls and run in about 8 seconds: the verified numbers from earlier phases still match, every airfoil stays below Betz and converges, BEM and momentum thrust agree, every search is at least as good as its baseline, the design search respects its limits, every mesh is watertight, the STL has every triangle, and every bad input is refused. Run <code>python3 evals.py</code> after any change. The agent questions grew to 35, with ten for the new tools.</p>
+<div class="note"><b>Live test so far (cap $0.05):</b> 3 of the 10 new questions ran before the cap. The model picked the right tool each time. One answer said 'optimized' and failed the checker, so the prompt and the checker were tightened. Each question now costs about $0.014 because 11 tool schemas travel with every request.</div>
+<h3>break_it.py: on purpose</h3>
+<p>Four cheap experiments (about $0.03) that break the agent deliberately to see why each defence exists: a vague tool description (the model picks the wrong tool), a tool that throws (the error path), a huge result (<code>trim_result</code>), and no stop condition (the step cap and repeat guard). A defence you have not seen fail is one you do not really understand.</p>
+</section><section class="newpage"><h2>5. The web chat (app.py + web/)</h2>
+<p>A small local website on top of the same agent. <code>python3 app.py</code> runs it at http://localhost:8000 with a $0.10 spending cap per server session. <code>python3 app.py --mock</code> makes <b>no API calls</b>: it picks a tool by keyword and still runs the real solver, so you can try it for free.</p>
+<table>
+<tr><th>Piece</th><th>What it does</th></tr>
+<tr><td><code>Handler</code> class</td><td>Python's built-in web server. <code>do_GET</code> serves the pages in <code>web/</code>, <code>do_POST</code> handles <code>/api/chat</code>.</td></tr>
+<tr><td><code>on_event</code> callback</td><td>The reason <code>ask_agent</code> takes an optional <code>on_event</code>. Each step (<code>tool_start</code>, <code>tool_result</code>, <code>usage</code>, <code>answer</code>) is streamed to the browser as it happens.</td></tr>
+<tr><td><code>run_real</code> / <code>run_mock</code></td><td>Live model vs. keyword picker. Same solver either way.</td></tr>
+<tr><td><code>load_dotenv</code></td><td>Reads your API key from <code>.env</code> so it never sits in the code. <code>.env</code> is in <code>.gitignore</code>: never commit it.</td></tr>
+<tr><td><code>web/index.html, app.js, styles.css</code></td><td>The page, the logic that reads the streamed events, the look. Chats are saved in the browser only.</td></tr>
+<tr><td><code>/api/mesh</code>, <code>/api/stl</code></td><td>The page sends a blade shape (radius, chord, twist, airfoil) and gets a mesh for the 3D view or an STL file back. <code>geometry_from_body</code> checks the input first.</td></tr>
+<tr><td><code>/exports/&lt;file&gt;.stl</code></td><td>Serves STL files saved by the <code>export_blade_stl</code> tool, refusing any path outside <code>exports/</code>.</td></tr>
+<tr><td>3D viewer</td><td>three.js (vendored in <code>web/vendor/</code>, loaded only when you open a viewer). Drag to rotate, scroll to zoom.</td></tr>
+</table>
+</section><section class="newpage"><h2>6. Cheat sheet</h2>
+<h3>Words you will keep meeting</h3>
+<table>
+<tr><th>Term</th><th>Meaning</th></tr>
+<tr><td>Cp</td><td>Power coefficient: power extracted divided by power in the wind through the rotor. Max possible is 16/27 = 0.5926 (Betz).</td></tr>
+<tr><td>a, a'</td><td>Axial induction (how much the wind slows down at the rotor) and tangential induction (swirl). Design target a = 1/3.</td></tr>
+<tr><td>phi</td><td>Flow angle: angle between the relative wind and the rotor plane.</td></tr>
+<tr><td>alpha, beta</td><td>Angle of attack (phi - beta) and twist (the angle the blade is turned).</td></tr>
+<tr><td>sigma</td><td>Solidity: fraction of the ring the blades fill.</td></tr>
+<tr><td>lambda (TSR)</td><td>Tip-speed ratio: tip speed divided by wind speed.</td></tr>
+<tr><td>chord / chord cap</td><td>Blade width at a point / the largest width allowed.</td></tr>
+<tr><td>tool_use / tool_result</td><td>The model asking to run a function / your reply with the function's output.</td></tr>
+<tr><td>stop_reason</td><td>Why the model stopped. <code>tool_use</code> means it wants a tool, anything else means it is done.</td></tr>
+<tr><td>JSON</td><td>Text format for dictionaries and lists, the language the model and your functions use to exchange data.</td></tr>
+</table>
+<h3>Bugs you have hit, and the tell for each</h3>
+<table>
+<tr><th>Bug</th><th>Tell</th></tr>
+<tr><td>Schema as bare ranges, or <code>}</code> pushing <code>required</code> out</td><td>No error, the tool just behaves oddly.</td></tr>
+<tr><td><code>block.id</code> vs <code>response.content[1]</code></td><td>Use <code>block.id</code> from the tool block you are handling.</td></tr>
+<tr><td><code>json.dumps</code> without brackets</td><td>You get a function object, not text.</td></tr>
+<tr><td><code>.text</code> on a tool block</td><td>Crash. Check <code>block.type</code> first.</td></tr>
+<tr><td>Pasting a line over a <code>???</code> and leaving <code>",</code></td><td>SyntaxError pointing near your edit.</td></tr>
+<tr><td>Running <code>tempCodeRunnerFile.py</code></td><td>Run the whole file instead.</td></tr>
+<tr><td><code>np.argmax</code> with nan</td><td>Picks the nan. Use <code>np.nanargmax</code>.</td></tr>
+<tr><td><code>plt.show()</code></td><td>Blocks the code after it. Save the figure instead.</td></tr>
+</table>
+<h3>Known limits of the system</h3>
+<ul>
+<li>The airfoil polar is a stand-in. Real data comes in Phase 10.</li>
+<li>3 of 16 corner combinations of the input ranges do not converge (all with 4 blades and a 3.0 m cap).</li>
+<li><code>sweep_tsr</code> designs a new blade at each speed, so TSR 5.5 and 7 look equal. That is not the same as Phase 7.1's window peak.</li>
+<li>The searches are grids, ring by ring: 'best found', not a proven optimum.</li>
+<li>No tip-loss correction, and the real polars are XFOIL at Re 1,000,000, so Cp values are optimistic.</li>
+</ul>
+<h3>Where this goes next</h3>
+<table>
+<tr><th>Phase</th><th>What</th><th>Status</th></tr>
+<tr><td>7</td><td>Agent v1 (SHIP 1)</td><td>Done</td></tr>
+<tr><td>8</td><td>Chord search, planform plot, <code>optimize_chord</code></td><td>Done, live-tested</td></tr>
+<tr><td>9</td><td>Twist search, <code>optimize_twist</code></td><td>Done, live-tested</td></tr>
+<tr><td>10</td><td>Real airfoils, <code>compare_airfoils</code></td><td>Done, evals pass, live test pending</td></tr>
+<tr><td>11</td><td>Whole-design search, 3D viewer, STL, auto evals (SHIP 2)</td><td>Done, evals pass, live test pending</td></tr>
+<tr><td>12</td><td>CAD geometry</td><td>Next</td></tr>
+</table>
+<div class="note"><b>The pattern for any new tool:</b> a function in its own file, a schema (often copied from <code>design_blade_tool</code>), <code>check_inputs</code>, one line in <code>TOOLS</code>, one entry in <code>ALL_TOOLS</code>, a rule in the system prompt, an eval in evals.py and a question in test_questions.py.</div>
+</section></body></html>

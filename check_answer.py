@@ -4,7 +4,7 @@ import anthropic
 
 BETZ = 16 / 27
 BETZ_FACTS = [0.593, 0.5926, 59.3, 59.26, 16, 27]
-TOOL_FACTS = [1, 2, 3, 4, 5.5, 6, 7, 8, 8.5, 10, 12, 1.5, 2.5]
+TOOL_FACTS = [1, 2, 3, 4, 5.5, 6, 7, 8, 8.5, 10, 12, 1.5, 2.5, 1000000, 0.25, 15, 10000, 100000, 5, 60, 12, 4412, 4415, 809]
 ALLOW_LIST = BETZ_FACTS + TOOL_FACTS
 JUDGE_MODEL = "claude-sonnet-5-5"
 JUDGE_USAGE = {"in": 0, "out": 0}
@@ -12,7 +12,8 @@ JUDGE_USAGE = {"in": 0, "out": 0}
 NUM_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?")
 
 PROSE_RULES = [
-    ("says 'optimized'", r"\boptimi[sz]ed\b"),
+    ("says 'optimized'", r"\boptimi[sz](ed|ing|ation)\b"),
+    ("says 'optimal'", r"\boptimal\b"),
     ("says twist increases or is linear", r"twist[^.\n]{0,60}\b(increas\w*|linear\w*)|\b(increas\w*|linear\w*)[^.\n]{0,20}twist"),
     ("says 'linear'", r"\blinear(ly)?\b"),
     ("percent of a theoretical maximum", r"\d+(\.\d+)?\s?%\s+of\s+(the\s+)?(theoretical|betz|maximum|max)\b"),
@@ -45,7 +46,8 @@ def derive_pool(tool_calls):
             continue
         if not isinstance(data, dict):
             continue
-        for key in ("cp", "best_cp", "thrust_N"):
+        for key in ("cp", "best_cp", "thrust_N", "cp_baseline", "cp_best_found",
+                    "thrust_baseline_N", "thrust_best_found_N"):
             values = data.get(key)
             if values is None:
                 continue
@@ -89,11 +91,13 @@ def check_betz(answer, question, tool_calls):
             data = json.loads(tc["output"])
         except ValueError:
             continue
-        cps = data.get("cp") if isinstance(data, dict) else None
-        if cps is None:
+        if not isinstance(data, dict):
             continue
-        if not isinstance(cps, list):
-            cps = [cps]
+        cps = []
+        for key in ("cp", "best_cp", "cp_baseline", "cp_best_found"):
+            value = data.get(key)
+            if value is not None:
+                cps += value if isinstance(value, list) else [value]
         if any(c > BETZ for c in cps):
             issues.append(f"{tc['tool']} returned a Cp above the Betz limit {BETZ:.4f}")
 

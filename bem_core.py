@@ -2,6 +2,8 @@
 bem_core.py -- the BEM solver as importable definitions only.
 Nothing in this file prints, plots or runs a study on import.
 """
+import os
+
 import numpy as np
 
 # ==================== Turbine constants ====================
@@ -23,21 +25,64 @@ tol = 1e-6
 max_iter = 100
 
 
-def airfoil(alpha):
+# ==================== Airfoil polars ====================
+# "standin" is the original made-up polar. The others are XFOIL data at Re 1e6
+# from airfoiltools.com (see data/airfoils/SOURCES.md).
+POLARS = ["standin", "naca0012", "naca4412", "naca4415", "s809"]
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "airfoils")
+_tables = {}
+
+
+def load_polar(name):
+    """Return (alpha_deg, cl, cd) arrays for a tabulated polar, read once and cached."""
+    if name not in _tables:
+        data = np.loadtxt(os.path.join(DATA_DIR, f"{name}_polar.csv"), delimiter=",", comments="#", skiprows=3)
+        _tables[name] = (data[:, 0], data[:, 1], data[:, 2])
+    return _tables[name]
+
+
+def _viterna(a_rad, a_s, cl_s, cd_s, cd_max=1.29):
+    """Viterna extension past the end of the table (a_s = last tabulated angle, radians)."""
+    a2 = 0.5 * cd_max
+    a2b = (cl_s - cd_max * np.sin(a_s) * np.cos(a_s)) * np.sin(a_s) / np.cos(a_s)**2
+    b2 = (cd_s - cd_max * np.sin(a_s)**2) / np.cos(a_s)
+    cl = a2 * np.sin(2 * a_rad) + a2b * np.cos(a_rad)**2 / np.sin(a_rad)
+    cd = cd_max * np.sin(a_rad)**2 + b2 * np.cos(a_rad)
+    return cl, cd
+
+
+def airfoil(alpha, polar="standin"):
     a_deg = np.degrees(alpha)                                       # alpha in radians
-    C_L = 0.11 * (a_deg + 2)
-    C_L = np.where(a_deg > 12, 1.54 - 0.05 * (a_deg - 12), C_L)     # after stall
-    C_D = 0.008 + 0.01 * C_L**2
-    C_D = np.where(a_deg > 12, C_D + 0.02 * (a_deg - 12), C_D)      # after stall
+    if polar == "standin":
+        C_L = 0.11 * (a_deg + 2)
+        C_L = np.where(a_deg > 12, 1.54 - 0.05 * (a_deg - 12), C_L)     # after stall
+        C_D = 0.008 + 0.01 * C_L**2
+        C_D = np.where(a_deg > 12, C_D + 0.02 * (a_deg - 12), C_D)      # after stall
+        return C_L, C_D
+
+    if polar not in POLARS:
+        raise ValueError(f"unknown airfoil '{polar}', choose from {POLARS}")
+    tab_a, tab_cl, tab_cd = load_polar(polar)
+    a_deg = np.clip(a_deg, -89.0, 89.0)
+    C_L = np.interp(a_deg, tab_a, tab_cl)                           # inside the table
+    C_D = np.interp(a_deg, tab_a, tab_cd)
+    with np.errstate(all="ignore"):
+        a_rad = np.radians(a_deg)
+        # above the table
+        cl_hi, cd_hi = _viterna(a_rad, np.radians(tab_a[-1]), tab_cl[-1], tab_cd[-1])
+        # below the table: mirror, extend, mirror back
+        cl_lo, cd_lo = _viterna(-a_rad, np.radians(-tab_a[0]), -tab_cl[0], tab_cd[0])
+    C_L = np.where(a_deg > tab_a[-1], cl_hi, np.where(a_deg < tab_a[0], -cl_lo, C_L))
+    C_D = np.where(a_deg > tab_a[-1], cd_hi, np.where(a_deg < tab_a[0], cd_lo, C_D))
     return C_L, C_D
 
 
-def design_blade(omega_design, alpha_d_deg, a_target, c_max, B=3):
+def design_blade(omega_design, alpha_d_deg, a_target, c_max, B=3, polar="standin"):
     alpha_d = np.radians(alpha_d_deg)
     phi_d = np.arctan(V_inf * (1 - a_target) / (omega_design * r))
     beta_d = phi_d - alpha_d
 
-    C_L_d, C_D_d = airfoil(alpha_d)
+    C_L_d, C_D_d = airfoil(alpha_d, polar)
     C_n_d = C_L_d * np.cos(phi_d) + C_D_d * np.sin(phi_d)
     sigma_d = 4 * np.sin(phi_d)**2 * a_target / ((1 - a_target) * C_n_d)
     c_d = np.minimum(sigma_d * 2 * np.pi * r / B, c_max)
@@ -45,7 +90,7 @@ def design_blade(omega_design, alpha_d_deg, a_target, c_max, B=3):
     return c_d, beta_d
 
 
-def solve_ring(r_i, c_i, beta_i, omega, B=3):
+def solve_ring(r_i, c_i, beta_i, omega, B=3, polar="standin"):
     sigma = (B * c_i) / (2 * np.pi * r_i)
     a = 0.3
     a_prime = 0.01
@@ -59,7 +104,7 @@ def solve_ring(r_i, c_i, beta_i, omega, B=3):
         phi = np.arctan(V_axial / V_tan)
         alpha = phi - beta_i
 
-        C_L, C_D = airfoil(alpha)
+        C_L, C_D = airfoil(alpha, polar)
         C_n = C_L * np.cos(phi) + C_D * np.sin(phi)
         C_t = C_L * np.sin(phi) - C_D * np.cos(phi)
 
@@ -78,7 +123,7 @@ def solve_ring(r_i, c_i, beta_i, omega, B=3):
     return a, a_prime, phi, alpha, i + 1, converged
 
 
-def solve_rotor(omega, c, beta, B):
+def solve_rotor(omega, c, beta, B, polar="standin"):
     a_arr = np.zeros(N)
     a_prime_arr = np.zeros(N)
     phi_arr = np.zeros(N)
@@ -88,12 +133,12 @@ def solve_rotor(omega, c, beta, B):
 
     for i in range(N):
         (a_arr[i], a_prime_arr[i], phi_arr[i], alpha_arr[i],
-         iter_arr[i], conv_arr[i]) = solve_ring(r[i], c[i], beta[i], omega, B)
+         iter_arr[i], conv_arr[i]) = solve_ring(r[i], c[i], beta[i], omega, B, polar)
 
     V_axial_arr = V_inf * (1 - a_arr)
     V_tan_arr = omega * r * (1 + a_prime_arr)
     V_rel_arr = np.sqrt(V_axial_arr**2 + V_tan_arr**2)
-    C_L, C_D = airfoil(alpha_arr)
+    C_L, C_D = airfoil(alpha_arr, polar)
     C_n_arr = C_L * np.cos(phi_arr) + C_D * np.sin(phi_arr)
     C_t_arr = C_L * np.sin(phi_arr) - C_D * np.cos(phi_arr)
 

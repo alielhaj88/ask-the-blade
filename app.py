@@ -36,6 +36,8 @@ def load_dotenv():
 
 load_dotenv()
 import BEM_solver_agent as agent  # noqa: E402  (imported after the key is loaded)
+from bem_core import POLARS  # noqa: E402
+from blade_geometry import build_mesh, stl_text  # noqa: E402
 
 PRICE_IN, PRICE_OUT = 1e-6, 5e-6  # Claude Haiku 4.5, dollars per token
 MODEL_LABEL = "Claude Haiku 4.5"
@@ -100,6 +102,14 @@ AXIS_LABEL = {
     "alpha_design_deg": "angle of attack",
     "num_blades": "blade count",
     "chord_cap_m": "chord cap",
+    "airfoil": "airfoil",
+}
+SWEPT = {
+    "sweep_blade_count": "num_blades",
+    "sweep_tsr": "lambda_design",
+    "sweep_aoa": "alpha_design_deg",
+    "sweep_chord_cap": "chord_cap_m",
+    "compare_airfoils": "airfoil",
 }
 
 
@@ -113,16 +123,51 @@ def extract_inputs(text):
                 return float(m.group(1))
         return default
 
-    return {
+    inputs = {
         "lambda_design": grab([r"tip[- ]speed ratio(?: of)? (\d+(?:\.\d+)?)", r"tsr(?: of| =)? ?(\d+(?:\.\d+)?)"], 7.0),
         "alpha_design_deg": grab([r"(\d+(?:\.\d+)?) ?(?:degrees|degree|deg|°)", r"aoa(?: of)? ?(\d+(?:\.\d+)?)"], 6.0),
-        "num_blades": int(grab([r"(\d) ?-?blades?", r"(\d)-blade"], 3)),
+        "num_blades": int(grab([r"\b(\d) ?-?blades?", r"\b(\d)-blade"], 3)),
         "chord_cap_m": grab([r"(\d+(?:\.\d+)?) ?m (?:chord )?cap", r"chord cap(?: of)? (\d+(?:\.\d+)?)", r"cap(?: of)? (\d+(?:\.\d+)?)"], 2.0),
     }
+    foil = re.search(r"\b(naca ?0012|naca ?4412|naca ?4415|s809)\b", t)
+    if foil:
+        inputs["airfoil"] = foil.group(1).replace(" ", "")
+    return inputs
+
+
+def extract_limits(text):
+    t = text.lower().replace(",", "")
+    limits = {}
+    kn = re.search(r"(\d+(?:\.\d+)?) ?kn", t)
+    n = re.search(r"(\d{5,6}) ?n\b", t)
+    area = re.search(r"(\d+(?:\.\d+)?) ?(?:m2|m²|square met)", t)
+    if kn:
+        limits["max_thrust_N"] = float(kn.group(1)) * 1000
+    elif n:
+        limits["max_thrust_N"] = float(n.group(1))
+    if area:
+        limits["max_blade_area_m2"] = float(area.group(1))
+    blades = re.search(r"\b(\d) ?-?blades?", t)
+    if blades:
+        limits["num_blades"] = int(blades.group(1))
+    return limits
 
 
 def pick_mock_tools(text):
     t = text.lower()
+    if re.search(r"\bstl\b|3d model|\bcad\b|3d print", t):
+        return ["export_blade_stl"]
+    if re.search(r"best (overall )?design|best blade you can|overall best|optimi[sz]e the (whole )?design|under .{0,20}(kn|thrust|area)", t):
+        return ["optimize_design"]
+    if re.search(r"airfoil", t) and re.search(r"compare|which|best|versus|vs", t):
+        return ["compare_airfoils"]
+    improve = re.search(r"optimi[sz]e|improve|reshape|better", t)
+    if improve and (("chord" in t and "twist" in t) or "blade shape" in t or "whole blade" in t):
+        return ["optimize_blade"]
+    if improve and "twist" in t:
+        return ["optimize_twist"]
+    if improve and ("chord" in t or "planform" in t):
+        return ["optimize_chord"]
     if "matter" in t and "angle" in t and "chord" in t:
         return ["sweep_aoa", "sweep_chord_cap"]
     if re.search(r"blade count|how many blades|which blade|number of blades", t):
@@ -137,6 +182,36 @@ def pick_mock_tools(text):
 
 
 def mock_answer(tool, inputs, result):
+    if tool in ("optimize_chord", "optimize_twist", "optimize_blade"):
+        what = {"optimize_chord": "chord only", "optimize_twist": "twist only", "optimize_blade": "chord and twist"}[tool]
+        return (
+            f"Search over {what}, ring by ring. Best found Cp **{result['cp_best_found']}** against a baseline of "
+            f"{result['cp_baseline']} (change {result['cp_change']}). Thrust {result['thrust_baseline_N']:,} N → "
+            f"{result['thrust_best_found_N']:,} N. Airfoil: {result['airfoil']}."
+        )
+    if tool == "compare_airfoils":
+        rows = "\n".join(f"| {a} | {cp} | {t:,} |" for a, cp, t in zip(result["airfoil"], result["cp"], result["thrust_N"]))
+        return (
+            f"Best of the airfoils tested: **{result['best_airfoil']}**, Cp **{result['best_cp']}**. "
+            f"Stand-in polar for reference: {result['standin_cp_for_reference']}. Data: {result['airfoil_data']}.\n\n"
+            f"| Airfoil | Cp | Thrust (N) |\n|---|---|---|\n{rows}"
+        )
+    if tool == "optimize_design":
+        d = result["best_design"]
+        lim = result["limits"]
+        lim_txt = ", ".join(f"{k} {v:g}" for k, v in lim.items() if v is not None) or "none"
+        return (
+            f"Best found design: {d['airfoil']}, tip-speed ratio {d['lambda_design']}, {d['alpha_design_deg']}° angle of attack, "
+            f"{d['num_blades']} blades, {d['chord_cap_m']} m chord cap. Cp **{result['cp_best_found']}**, thrust "
+            f"{result['thrust_N']:,} N, blade area {result['blade_area_m2']} m². Limits: {lim_txt}. "
+            f"{result['designs_within_limits']} of {result['designs_screened']} screened designs were within the limits."
+        )
+    if tool == "export_blade_stl":
+        return (
+            f"Saved `{result['stl_file']}` ({result['shape']} blade, {result['triangles']} triangles, "
+            f"watertight: {'yes' if result['watertight'] else 'no'}, {result['file_size_kB']} kB). "
+            f"Open the run card to view it in 3D or download it."
+        )
     if tool == "design_blade":
         c, tw = result["chord_m"], result["twist_deg"]
         return (
@@ -162,13 +237,13 @@ def run_mock(question, send):
     tools = pick_mock_tools(question)
     parts = []
     for i, name in enumerate(tools):
-        swept = {
-            "sweep_blade_count": "num_blades",
-            "sweep_tsr": "lambda_design",
-            "sweep_aoa": "alpha_design_deg",
-            "sweep_chord_cap": "chord_cap_m",
-        }.get(name)
-        tool_input = {k: v for k, v in inputs.items() if k != swept}
+        swept = SWEPT.get(name)
+        if name == "optimize_design":
+            tool_input = {**extract_limits(question), **({"airfoil": inputs["airfoil"]} if "airfoil" in inputs else {})}
+        else:
+            tool_input = {k: v for k, v in inputs.items() if k != swept}
+        if name == "export_blade_stl" and re.search(r"best|optimi[sz]ed|improved", question.lower()):
+            tool_input["shape"] = "best_found"
         call_id = f"mock_{int(time.time() * 1000)}_{i}"
         send("tool_start", {"id": call_id, "name": name, "input": tool_input})
         time.sleep(0.6)
@@ -221,7 +296,22 @@ CONTENT_TYPES = {
     ".js": "application/javascript; charset=utf-8",
     ".svg": "image/svg+xml",
     ".ico": "image/x-icon",
+    ".stl": "model/stl",
 }
+
+
+def geometry_from_body(body):
+    """Check a blade shape sent by the page: ten radii, chords and twists, plus an airfoil name."""
+    radius, chord, twist = body.get("radius_m"), body.get("chord_m"), body.get("twist_deg")
+    foil = body.get("airfoil", "standin")
+    for name, values, low, high in (("radius_m", radius, 2, 20), ("chord_m", chord, 0.01, 3.5), ("twist_deg", twist, -90, 90)):
+        if not isinstance(values, list) or len(values) != 10 or not all(isinstance(v, (int, float)) for v in values):
+            raise ValueError(f"{name} must be a list of 10 numbers")
+        if not all(low <= v <= high for v in values):
+            raise ValueError(f"{name} values must be between {low} and {high}")
+    if foil not in POLARS:
+        raise ValueError(f"airfoil must be one of {POLARS}")
+    return build_mesh(radius, chord, twist, foil)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -246,6 +336,18 @@ class Handler(BaseHTTPRequestHandler):
                 spent = SPEND["dollars"]
             return self.send_json(200, {"mock": CONFIG["mock"], "model": MODEL_LABEL,
                                         "budget": CONFIG["budget"], "spent": spent})
+        if path.startswith("/exports/"):
+            exports = Path(agent.EXPORT_DIR).resolve()
+            file = (exports / path[len("/exports/"):]).resolve()
+            if exports not in file.parents or not file.is_file() or file.suffix != ".stl":
+                return self.send_error(404)
+            data = file.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "model/stl")
+            self.send_header("Content-Disposition", f'attachment; filename="{file.name}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            return self.wfile.write(data)
         if path == "/":
             path = "/index.html"
         file = (WEB / path.lstrip("/")).resolve()
@@ -260,7 +362,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if self.path != "/api/chat":
+        if self.path not in ("/api/chat", "/api/mesh", "/api/stl"):
             return self.send_error(404)
         length = int(self.headers.get("Content-Length") or 0)
         if length > 200_000:
@@ -269,6 +371,22 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
             return self.send_json(400, {"error": "Request body is not valid JSON."})
+
+        if self.path in ("/api/mesh", "/api/stl"):
+            try:
+                verts, faces = geometry_from_body(body)
+            except (ValueError, TypeError) as e:
+                return self.send_json(400, {"error": str(e)})
+            if self.path == "/api/mesh":
+                return self.send_json(200, {"positions": verts.round(4).ravel().tolist(),
+                                            "indices": faces.ravel().tolist()})
+            data = stl_text(verts, faces).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "model/stl")
+            self.send_header("Content-Disposition", 'attachment; filename="blade.stl"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            return self.wfile.write(data)
 
         question = str(body.get("message", "")).strip()[:4000]
         history = clean_history(body.get("history"))

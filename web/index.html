@@ -62,12 +62,13 @@
         <div class="empty" id="empty">
           <svg class="rotor rotor-hero" viewBox="-24 -24 48 48" aria-hidden="true"></svg>
           <h1>Ask the blade.</h1>
-          <p class="lede">Ask about a 20 m rotor in plain words. A blade element momentum solver runs every calculation, and you can open each run to see the numbers behind the answer.</p>
+          <p class="lede">Ask about a 20 m rotor in plain words. A blade element momentum solver runs every calculation, searches for better blades, compares real airfoils and builds the blade in 3D. Open each run to see the numbers behind the answer.</p>
           <dl class="limits">
             <div><dt>Tip-speed ratio</dt><dd>4 – 10</dd></div>
             <div><dt>Angle of attack</dt><dd>2 – 12°</dd></div>
             <div><dt>Blades</dt><dd>1 – 4</dd></div>
             <div><dt>Chord cap</dt><dd>1.0 – 3.0 m</dd></div>
+            <div><dt>Airfoils</dt><dd>stand-in + 4 real</dd></div>
           </dl>
           <div class="examples" id="examples"></div>
         </div>
@@ -77,7 +78,7 @@
       <footer class="composer-wrap">
         <form class="composer" id="composer">
           <label class="sr-only" for="input">Your question</label>
-          <textarea id="input" rows="1" placeholder="Ask about Cp, thrust, blade count, tip-speed ratio…" autocomplete="off"></textarea>
+          <textarea id="input" rows="1" placeholder="Ask about Cp, airfoils, a better blade, a 3D model…" autocomplete="off"></textarea>
           <button class="send" id="sendBtn" type="submit" aria-label="Send">
             <svg class="i-send" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4M5 9l5-5 5 5"/></svg>
             <svg class="i-stop" viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1.5"/></svg>
