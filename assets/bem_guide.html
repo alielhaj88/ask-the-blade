@@ -34,7 +34,7 @@ ul{margin:.3em 0 1em;padding-left:1.2em}
 <section>
 <h2>0. The big picture</h2>
 <p>You type a plain-English question. A language model (Claude Haiku 4.5) does <b>not</b> answer from memory. It picks one of eleven tools, the solver runs the real physics, and the model reports the numbers that come back. That one rule, <i>the model never does physics</i>, shapes almost every file.</p>
-<img src="file:///Users/alielhaj/Documents/Workspace/04_LEARNING/AI Agents Mastery/Wind BEM Agent/assets/bem-system-illustrations/01-question-trip.png">
+<img src="bem-system-illustrations/01-question-trip.png">
 <p class="cap">Picture 1. One question's trip. Orange = the path, red = rules, blue = system notes.</p>
 <table>
 <tr><th>File</th><th>Job</th><th>Part</th></tr>
@@ -92,7 +92,7 @@ max_iter = 100</pre><div class="why">Settings for the solver: stop when the answ
 
 <h3>1.4 solve_ring(): the heart of BEM</h3>
 <p>Here is the loop that makes BEM work. The wind slowdown <code>a</code> and the swirl <code>a_prime</code> both change the angle of attack, but the angle of attack decides the forces that decide <code>a</code> and <code>a_prime</code>. It is circular, so we guess, recompute, and repeat until the answer stops changing. That is called <b>fixed-point iteration</b>.</p>
-<img src="file:///Users/alielhaj/Documents/Workspace/04_LEARNING/AI Agents Mastery/Wind BEM Agent/assets/bem-system-illustrations/02-inside-the-solver.png">
+<img src="bem-system-illustrations/02-inside-the-solver.png">
 <p class="cap">Picture 2. 小黑 keeps turning the dial on a ring until it settles. Total power can never beat the Betz limit.</p>
 <div class="step"><pre>def solve_ring(r_i, c_i, beta_i, omega, B=3, polar=&quot;standin&quot;):
     sigma = (B * c_i) / (2 * np.pi * r_i)
@@ -404,7 +404,7 @@ C_STEP = 0.05        # m, spacing between tried chords</pre><div class="why">Thi
 <tr><td>Chord at ring 4 to 10 (m)</td><td>2.0, 1.675, 1.429, 1.245, 1.103, 0.99, 0.898</td><td>1.9, 1.6, 1.35, 1.2, 1.05, 0.95, 0.85</td></tr>
 <tr><td>Rings at the 2.0 m cap</td><td colspan="2">3 (the inner rings stay at the cap)</td></tr>
 </table>
-<img src="file:///Users/alielhaj/Documents/Workspace/04_LEARNING/AI Agents Mastery/Wind BEM Agent/chord_planform.png">
+<img src="../chord_planform.png">
 <p class="cap">Picture 3. Planform: baseline (blue) vs best found (orange). They almost overlap.</p>
 <div class="warn"><b>What this tells you.</b> The gain is only 0.0012 in Cp. The theory-based blade was already close to the best this stand-in polar allows. The search trims the outer chords slightly and cuts thrust by about 2%. That is a real answer: a small gain, shown honestly. With real airfoil data (Phase 10) the picture may change.</div>
 <h3>plot_planform(): the picture</h3>
@@ -525,7 +525,7 @@ def run_optimize_chord(tool_input):
 <p>Every tool also accepts an optional <code>airfoil</code>. The system prompt gained rules for the new tools: call results 'best found', never optimal; say once that real-airfoil results are XFOIL data at Re 1,000,000; mention the missing tip-loss correction if asked whether Cp is realistic.</p>
 </section><section class="newpage"><h2>4. Keeping it honest: tests and the checker</h2>
 <p>The model's numbers were mostly faithful, but its prose sometimes added claims nobody gave it (<i>'increasing twist'</i>, <i>'optimized'</i>, <i>'49.8% of theoretical maximum'</i>). So there is a checker that reads an answer and compares it with what the tools actually returned.</p>
-<img src="file:///Users/alielhaj/Documents/Workspace/04_LEARNING/AI Agents Mastery/Wind BEM Agent/assets/bem-system-illustrations/03-trust-checker.png">
+<img src="bem-system-illustrations/03-trust-checker.png">
 <p class="cap">Picture 4. Every number in the answer is traced to the tool log. Invented claims get caught.</p>
 <h3>The five checks in check_answer()</h3>
 <table>
